@@ -1,0 +1,18 @@
+# generated / downloaded (see README: "Data and weights")
+/data/
+/output/
+/logs/
+/runs/
+/.pixi/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.pyright/
+*.egg-info/
+*.zarr/
+*.part
+# forks and bundles used only by the legacy experiments; not needed by the ported code
+/third_party/
+TRANSFER_README.md
+AGENT_ONBOARDING.md

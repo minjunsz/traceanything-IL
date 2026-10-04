@@ -1,0 +1,25 @@
+target-version = "py312"
+line-length = 140
+src = ["src", "tests", "experiments"]
+extend-exclude = ["third_party", "output"]
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF", "PT"]
+ignore = [
+    "E501",    # line length is the formatter's job; long comments in the ported FSMs are fine
+    "RUF001", "RUF002", "RUF003",  # comments use plain unicode symbols deliberately
+    "RUF012",  # class-level constants (FSM tuning values) are not meant to be mutated
+    "B008",    # dataclass default factories and tyro defaults
+    "SIM108",  # keep explicit if/else when it reads better than a ternary
+]
+
+[lint.per-file-ignores]
+"src/*" = ["PT018"]  # compound asserts are fine outside tests
+"tests/*" = ["PT011", "PT018", "B017"]
+"experiments/*" = ["E402", "PT008", "PT018"]  # legacy comparison scripts patch with lambdas
+
+[lint.isort]
+known-first-party = ["markovian_policy"]
+
+[format]
+quote-style = "double"

@@ -1,0 +1,364 @@
+[workspace]
+authors = ["Minjun Park <minjunpark@snu.ac.kr>"]
+channels = ["conda-forge"]
+name = "markovian-policy"
+platforms = [
+  { name = "linux-cuda", platform = "linux-64", cuda = "12.9" },
+  { name = "linux-nocuda", platform = "linux-64" },
+]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+
+# --- TraceAnything (third_party/TraceAnything) ---
+# Upstream: https://github.com/ByteDance-Seed/TraceAnything
+# README asks for Python>=3.10, torch/torchvision, and the pip packages listed
+# below; upstream only tested CUDA 12.8, but our cluster's RTX PRO 6000
+# (Blackwell, sm_120) needs a pytorch-gpu build with sm_120 support, which only
+# exists from cuda-version 12.9 onward on conda-forge -- verified the resulting
+# build also keeps sm_86 (binary-compatible with the L40's sm_89 within the
+# same CUDA major/minor family) so both team GPU types work.
+[feature.trace-anything]
+platforms = ["linux-cuda"]
+
+[feature.trace-anything.dependencies]
+python = "3.10.*"
+cuda-version = "12.9.*"
+pytorch-gpu = "*"
+torchvision = "*"
+einops = "*"
+omegaconf = "*"
+pillow = "*"
+opencv = "*"
+viser = "*"
+imageio = "*"
+matplotlib = "*"
+# needed to build the optional curope CUDA extension below (cpp_extension /
+# CUDAExtension); TraceAnything itself needs no other custom kernels.
+cuda-nvcc = "*"
+ninja = "*"
+setuptools = "*"
+
+[feature.trace-anything.activation.env]
+# third_party/fast3r/croco/models/curope vendors just the curope RoPE2D CUDA
+# extension from facebookresearch/fast3r (CC BY-NC-SA 4.0, non-commercial) so
+# trace_anything/layers/pos_embed.py's `from fast3r.croco.models.curope import
+# cuRoPE2D` resolves without pulling in all of fast3r.
+PYTHONPATH = "$PIXI_PROJECT_ROOT/third_party"
+
+[feature.trace-anything.tasks]
+ta-check = "python -c \"import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.device_count())\""
+ta-infer = { cmd = "python scripts/infer.py", cwd = "third_party/TraceAnything" }
+ta-view = { cmd = "python scripts/view.py", cwd = "third_party/TraceAnything" }
+build-curope = { cmd = "python setup.py build_ext --inplace", cwd = "third_party/fast3r/croco/models/curope" }
+
+
+# --- Franka Kitchen / relay-policy-learning (third_party/relay-policy-learning) ---
+# Fork used: https://github.com/Michaelszeng/relay-policy-learning (adds a
+# Markovian scripted-expert data generator in experts/, relevant to this
+# project). mujoco-py needs Python <=3.9 and links against a real MuJoCo 2.1.0
+# binary (not the pip `mujoco` package) -- downloaded separately to
+# ~/.mujoco/mujoco210. Versions below match the fork's own SLURM_README (a
+# working pin set), not floated freely -- mujoco-py + old gym/dm_control are
+# fragile across versions.
+#
+# Rendering backend: mujoco-py auto-picks CPU/OSMesa when no NVIDIA GPU is
+# visible, else GPU/EGL (see mujoco_py/builder.py's get_nvidia_lib_dir(), which
+# just checks `nvidia-smi` + a hardcoded /usr/lib/nvidia-style path -- present
+# but empty on this login node, so this environment only renders on an actual
+# GPU node; the login node can still build/import everything else here for
+# iterating on the expert/subtask code without a GPU).
+# We CANNOT use the CPU/OSMesa path at all on this cluster: conda-forge's
+# `mesalib` (as of 26.2.1) dropped the classic OSMesa build target (only
+# lavapipe/llvmpipe remain -- checked the mesalib-feedstock recipe directly),
+# so `GL/osmesa.h` + libOSMesa are simply unavailable here, apt is not an
+# option (no sudo), and there's no separate conda-forge package that ships them.
+# The GPU/EGL path instead needs xorg-libx11 (Xlib.h)/xorg-xorgproto (X11/X.h,
+# pulled in by mujoco_py's vendored eglplatform.h even though we don't use X),
+# libgl-devel (GL/gl.h), and mesalib (its bundled libEGL.so.1 -- without it the
+# built extension fails to *load*, `ImportError: libEGL.so.1: cannot open
+# shared object file`, even though it links fine at build time; EGL's ICD
+# dispatch should still prefer the real NVIDIA backend on a GPU node once one
+# is present). Verified sufficient by temporarily forcing get_nvidia_lib_dir()
+# to return a dummy path and confirming `import mujoco_py` builds, links, and
+# loads cleanly end-to-end (on this GPU-less login node).
+[feature.franka-kitchen]
+platforms = ["linux-nocuda"]
+
+[feature.franka-kitchen.dependencies]
+python = "3.9.*"
+mesalib = "*"
+glew = "*"
+glfw = "*"
+patchelf = "*"
+pip = "*"
+xorg-libx11 = "*"
+xorg-xorgproto = "*"
+libgl-devel = "*"
+
+[feature.franka-kitchen.pypi-dependencies]
+cython = "==0.29.32"
+numpy = "==1.26.4"
+mujoco-py = "==2.1.2.14"
+mujoco = "==2.3.5"
+gym = "==0.26.2"
+zarr = "==2.12.0"
+numcodecs = "==0.10.2"
+imageio = "==2.22.0"
+imageio-ffmpeg = "==0.4.7"
+matplotlib = "==3.7.0"
+opencv-python = "==4.11.0.86"
+tqdm = "==4.64.1"
+click = "==8.1.8"
+mjrl = { git = "https://github.com/aravindr93/mjrl.git" }
+scikit-video = "==1.1.11"
+termcolor = "*"
+# Not in upstream's base README list, but adept_envs/simulation/sim_robot.py
+# unconditionally calls module.get_dm_mujoco() (dm_control), so it's a real
+# hard dependency for env creation, not just for eval/README.md's separate
+# policy-eval pipeline. Pinned to match the version validated there.
+dm_control = "==1.0.12"
+
+[feature.franka-kitchen.activation]
+# Re-applies the get_nvidia_lib_dir() GPU-detection patch (see the .py for
+# why) on every activation, since `pip install mujoco-py` overwrites it.
+scripts = ["third_party/patch_mujoco_py_gpu_detect.sh"]
+
+[feature.franka-kitchen.activation.env]
+LD_LIBRARY_PATH = "$HOME/.mujoco/mujoco210/bin:$LD_LIBRARY_PATH"
+PYTHONPATH = "$PIXI_PROJECT_ROOT/third_party/relay-policy-learning/adept_envs"
+# dm_control has its OWN GL backend picker, separate from mujoco_py's (which
+# we already patched). Without this it defaulted to GLFW (`GLFWError: Failed
+# to detect any supported platform` -> `mujoco.FatalError: gladLoadGL error`)
+# instead of EGL, even though EGL is what actually works here (confirmed by
+# 002b_fk_diagnose.py using mujoco_py's own MjRenderContextOffscreen directly).
+MUJOCO_GL = "egl"
+
+[feature.franka-kitchen.tasks]
+# adept_envs/simulation/module.py swallows the real mujoco_py import error
+# (bare `except ImportError: print(generic msg); sys.exit(1)`), so check the
+# raw import first -- any real failure surfaces here instead of silently.
+fk-diagnose = "python experiments/002b_fk_diagnose.py"
+fk-check = "python -c \"import adept_envs, gym; e = gym.make('kitchen_relax-v1'); print('env ok:', e); e.reset(); img = e.render(mode='rgb_array', camera_id=2); print('render ok:', img.shape, img.dtype)\""
+fk-record-demos = { cmd = "python record_demos.py --randomize --chain-len 4 --seed 0 --n-workers 4 --out ../../../output/kitchen_demos_markovian_scripted_expert.zarr", cwd = "third_party/relay-policy-learning/experts" }
+
+
+# --- Diffusion Policy training (third_party/diffusion-policy-experiments) ---
+# Repo: https://github.com/Michaelszeng/diffusion-policy-experiments
+# Its requirements.txt pins torch==2.3.1/torchvision==0.18.1 (for
+# r3m/robomimic/diffusers==0.11.1 compatibility) -- a full major version behind
+# trace-anything's conda-forge pytorch-gpu (2.13), so PyPI wheels pinned to
+# exact versions is a deliberate exception to the pixi skill's "prefer
+# conda-forge" default here, not an oversight. Skipped a few requirements.txt
+# entries not needed for the franka_kitchen + R3M + attention-policy path we're
+# using: drake (their separate Push-T-via-Drake experiment),
+# robomimic/pytorchvideo/boto3/datasets/dask (other experiment types /
+# cloud-storage utilities unused here).
+#
+# Split into TWO GPU-specific torch pins (feature.diffusion-policy-l40 /
+# -pro6000 below), not one: the upstream 2.3.1/cu121 pin has no sm_120 kernels
+# at all (PyPI cu121 builds top out around Hopper/sm_90 -- Blackwell needs the
+# cu128 wheel series from torch>=2.7), so it flat-out can't run on the RTX PRO
+# 6000 ("no kernel image is available for execution on the device"). Bumping
+# torch instead of switching to conda-forge (as trace-anything's sm_120 note
+# does) seemed reasonable since diffusion-policy's actually-used code path
+# (JUICER-style encoders in r3m_config_util.py, diffusers DDPM/DDIM
+# schedulers, an `accelerate`-based train loop) has no hard 2.3.1-specific API
+# need -- r3m's own setup.py only requires torch>=1.7.1/torchvision>=0.8.2. But
+# don't just float torch to whatever's newest on L40: verified end-to-end
+# (forward/backward/real-data, all on CPU since the login node has no GPU) with
+# 2.3.1 specifically, and a later switch to 2.7.1/cu128 (for the pro6000
+# attempt) broke real GPU training on L40 with `Could not load library
+# libcudnn_ops_infer.so.8` -> SIGABRT, even though the installed
+# nvidia-cudnn-cu12 (9.7.1.26) matches what torch 2.7.1 itself declares
+# (Requires-Dist in its METADATA) -- root cause not yet found, so 2.7.1 is
+# parked in its own feature until that's debugged, rather than trusted for L40.
+# Needs BOTH `trace_anything` (to run it on-the-fly for conditioning, see
+# diffusion_policy/model/vision/trace_anything_encoder.py) and `diffusion_policy`
+# importable, hence the two-repo PYTHONPATH below.
+[feature.diffusion-policy]
+platforms = ["linux-cuda"]
+
+[feature.diffusion-policy.dependencies]
+python = "3.10.*"
+
+[feature.diffusion-policy.pypi-dependencies]
+numpy = "==1.26.4"
+cffi = "==1.15.1"
+matplotlib = "==3.7.0"
+zarr = "==2.12.0"
+numcodecs = "==0.10.2"
+# Not in requirements.txt (probably pulled in transitively by the robomimic
+# dep we skip) but diffusion_policy/common/json_logger.py imports it directly.
+pandas = "*"
+hydra-core = "==1.2.0"
+einops = "==0.4.1"
+tqdm = "==4.64.1"
+dill = "==0.3.5.1"
+opencv-python = ">=4.5.0"
+scikit-video = "==1.1.11"
+scikit-image = "==0.19.3"
+wandb = "==0.13.3"
+threadpoolctl = "==3.1.0"
+cython = "==0.29.32"
+imageio = "==2.22.0"
+imageio-ffmpeg = "==0.4.7"
+termcolor = "==2.0.1"
+psutil = "==5.9.2"
+accelerate = "==0.13.2"
+diffusers = "==0.11.1"
+huggingface-hub = "==0.25.2"
+numba = "==0.59.1"
+r3m = { url = "https://github.com/facebookresearch/r3m/archive/b2334e726887fa0206962d7984c69c5fb09cceab.tar.gz" }
+# wandb (via accelerate/diffusers) does `from pkg_resources import ...` at
+# import time; newer setuptools dropped pkg_resources, so pin below that.
+setuptools = "<81"
+# needed to import trace_anything (see feature.trace-anything above); not in
+# diffusion-policy-experiments' own requirements.txt.
+omegaconf = "*"
+pillow = "*"
+
+[feature.diffusion-policy.activation.env]
+PYTHONPATH = "$PIXI_PROJECT_ROOT/third_party/TraceAnything:$PIXI_PROJECT_ROOT/third_party/diffusion-policy-experiments"
+
+[feature.diffusion-policy.tasks]
+dp-check = "python -c \"import torch, diffusers, hydra, zarr; from diffusion_policy.workspace.base_workspace import BaseWorkspace; from trace_anything.trace_anything import TraceAnything; print('torch', torch.__version__, torch.version.cuda, torch.cuda.is_available())\""
+
+# torch/torchvision + their exact matching nvidia-cudnn-cu12 (pinned to what
+# each torch version's own METADATA Requires-Dist declares, not left to the
+# resolver -- see the feature.diffusion-policy comment above for why this
+# needs to be pinned per-GPU-type at all).
+[feature.diffusion-policy-l40.pypi-dependencies]
+torch = { version = "==2.3.1", index = "https://download.pytorch.org/whl/cu121" }
+torchvision = { version = "==0.18.1", index = "https://download.pytorch.org/whl/cu121" }
+nvidia-cudnn-cu12 = "==8.9.2.26"
+
+[feature.diffusion-policy-pro6000.pypi-dependencies]
+# Not yet verified end-to-end on an actual pro6000 node (the libcudnn_ops_infer.so.8
+# SIGABRT was found while this was mistakenly active on an L40 run) -- treat as
+# untested until a real training step completes on pro6000.
+torch = { version = "==2.7.1", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { version = "==0.22.1", index = "https://download.pytorch.org/whl/cu128" }
+nvidia-cudnn-cu12 = "==9.7.1.26"
+
+# --- Diffusion Policy v2: clean reimplementation (recent deps, src/diffusion_policy) ---
+# Unlike feature.diffusion-policy above, this drops robomimic/r3m/hydra-core, so the
+# PyPI-pinned-torch exception that stack needed (see the comment on feature.diffusion-policy)
+# no longer applies -- back to this project's default conda-forge `pytorch-gpu` +
+# `cuda-version` pattern (see feature.trace-anything), which that feature's own comment
+# already verified builds sm_120 (RTX PRO 6000) while keeping sm_86 (L40 sm_89-compatible)
+# from a single build, so ONE environment covers both team GPU types instead of splitting
+# into -l40/-pro6000 features. diffusers/transformers/accelerate/timm are all published on
+# conda-forge too, so the whole feature resolves from one channel.
+# zarr pinned to the 2.x series (not floated to 3.x) because existing data under output/
+# (e.g. kitchen_demos_*.zarr) was written with zarr==2.12.0 and zarr 3's storage API is not
+# backward compatible with those stores.
+[feature.dpv2]
+platforms = ["linux-cuda"]
+
+[feature.dpv2.dependencies]
+python = "3.11.*"
+cuda-version = "12.9.*"
+pytorch-gpu = "*"
+torchvision = "*"
+diffusers = "*"
+transformers = "*"
+accelerate = "*"
+timm = "*"
+zarr = "2.*"
+numcodecs = "*"
+numba = "*"
+einops = "*"
+numpy = "*"
+tqdm = "*"
+pillow = "*"
+opencv = "*"
+wandb = "*"
+
+[feature.dpv2.activation.env]
+PYTHONPATH = "$PIXI_PROJECT_ROOT/src"
+
+[feature.dpv2.tasks]
+# Beyond import + cuda.is_available(), this specifically exercises conv1d and
+# scaled_dot_product_attention forward+backward on GPU, since the old PyPI-pinned
+# torch==2.7.1+cu128 stack (feature.diffusion-policy-pro6000) hit a CUDA "illegal memory
+# access" inside SDPA on the RTX PRO 6000 (Blackwell/sm_120) -- see experiments/006_dp_check_v2.py.
+dp-check-v2 = "python experiments/006_dp_check_v2.py"
+
+# --- Closed-loop kitchen evaluation (third_party/relay-policy-learning/eval) ---
+# evaluate_kitchen.py needs the diffusion-policy stack (torch 2.3.1 +
+# trace_anything, Python 3.10) AND the kitchen sim in ONE process. The
+# franka-kitchen feature can't be reused as-is (Python 3.9 pin, linux-nocuda
+# only), so this duplicates its sim deps without the Python pin; the other
+# environments are untouched. mujoco-py 2.1.2.14 is the same sdist on 3.10
+# (built on first import, needs cython<3 -- pinned by feature.diffusion-policy).
+[feature.kitchen-eval]
+platforms = ["linux-cuda"]
+
+[feature.kitchen-eval.dependencies]
+mesalib = "*"
+glew = "*"
+glfw = "*"
+patchelf = "*"
+xorg-libx11 = "*"
+xorg-xorgproto = "*"
+libgl-devel = "*"
+
+[feature.kitchen-eval.pypi-dependencies]
+mujoco-py = "==2.1.2.14"
+mujoco = "==2.3.5"
+gym = "==0.26.2"
+click = "==8.1.8"
+mjrl = { git = "https://github.com/aravindr93/mjrl.git" }
+dm_control = "==1.0.12"
+statsmodels = "*"
+
+[feature.kitchen-eval.activation]
+scripts = ["third_party/patch_mujoco_py_gpu_detect.sh"]
+
+[feature.kitchen-eval.activation.env]
+LD_LIBRARY_PATH = "$HOME/.mujoco/mujoco210/bin:$LD_LIBRARY_PATH"
+PYTHONPATH = "$PIXI_PROJECT_ROOT/third_party/TraceAnything:$PIXI_PROJECT_ROOT/third_party/diffusion-policy-experiments:$PIXI_PROJECT_ROOT/third_party/relay-policy-learning/adept_envs"
+MUJOCO_GL = "egl"
+
+# --- Ported stack (src/): python 3.12 + up-to-date deps only. See plans/003_port_to_src.md ---
+[feature.port]
+platforms = ["linux-cuda"]
+
+[feature.port.dependencies]
+python = "3.12.*"
+cuda-version = "12.9.*"
+pytorch-gpu = "*"
+numpy = ">=2"
+gymnasium = "*"
+zarr = ">=3"
+numcodecs = "*"
+diffusers = "*"
+accelerate = "*"
+einops = "*"
+imageio = "*"
+imageio-ffmpeg = "*"
+matplotlib = "*"
+tqdm = "*"
+tyro = "*"
+pandas = "*"
+pytest = "*"
+pyright = "*"
+
+[feature.port.pypi-dependencies]
+mujoco = "*"
+
+[feature.port.activation.env]
+PYTHONPATH = "$PIXI_PROJECT_ROOT/src"
+MUJOCO_GL = "egl"
+
+[environments]
+trace-anything = { features = ["trace-anything"] }
+franka-kitchen = { features = ["franka-kitchen"] }
+diffusion-policy-l40 = { features = ["diffusion-policy", "diffusion-policy-l40"] }
+diffusion-policy-pro6000 = { features = ["diffusion-policy", "diffusion-policy-pro6000"] }
+dpv2 = { features = ["dpv2"] }
+dp-kitchen-eval = { features = ["diffusion-policy", "diffusion-policy-l40", "kitchen-eval"] }
+port = { features = ["port"] }

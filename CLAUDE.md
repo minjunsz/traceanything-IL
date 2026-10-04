@@ -1,0 +1,6 @@
+- Use pixi environment.
+- This is slurm environment. Use slurm scripts for computational heavy works.
+- Keep files organized.
+    - `experiments` directory contains ordered, atomic experiment scripts (NNN_exp_name.py).
+    - `output` directory contains all temporary files. I prefer using output directory within the project rather than using the global `/tmp` directory.
+    - `src` directory contains reusable codes. This directory should be well modularized.

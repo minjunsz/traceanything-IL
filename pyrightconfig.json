@@ -1,0 +1,17 @@
+{
+  "include": [
+    "src/markovian_policy"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "strict",
+  "reportMissingTypeStubs": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnknownParameterType": false,
+  "reportUnknownLambdaType": false,
+  "reportMissingParameterType": true,
+  "reportPrivateUsage": false,
+  "reportUnusedCallResult": false,
+  "reportImportCycles": false
+}
