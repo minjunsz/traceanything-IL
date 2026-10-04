@@ -76,6 +76,45 @@ python experiments/023_train_trace_policy.py --data.zarr-path data/demos.zarr \
 python experiments/026_eval.py --checkpoint runs/trace_policy/checkpoints/latest.ckpt --out-dir eval/run --n-rollouts 50
 ```
 
+## Human-data experiment, end to end
+
+Replay the human teleoperation logs, cache the encoder tokens for both cameras, train a plan-free policy
+(`agent_pos` + scene + wrist), and evaluate it. On a Slurm cluster every step is a job; `--parsable` and
+`--dependency=afterok` chain them (run from the repository root; GPU partitions are set in the sbatch files).
+
+```bash
+# 0. weights + human logs -> data/weights/trace_anything.pt, data/raw/kitchen_demos_multitask.zip (no GPU needed)
+python experiments/029_download_assets.py
+
+# 1. replay the logs with physics -> data/human.zarr (+ data/human.summary.json: kept/rejected logs); 1 GPU, resumable
+J1=$(sbatch --parsable experiments/028_build_human_demos.sbatch --out data/human.zarr)
+
+# 2. TraceAnything token cache, once per camera -> data/trace_cache/human_obs8_{scene,wrist}; 4 GPUs, resumable
+J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,ZARR=data/human.zarr,CAMERA=scene experiments/022_cache_trace_tokens.sbatch)
+J3=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,ZARR=data/human.zarr,CAMERA=wrist experiments/022_cache_trace_tokens.sbatch)
+
+# 3. train: low-dim input is agent_pos only (the human logs carry no plan conditioning); 4 GPUs, resumable
+J4=$(sbatch --parsable --dependency=afterok:$J2:$J3 experiments/023_train_trace_policy.sbatch \
+    --data.zarr-path data/human.zarr \
+    --data.lowdim-keys agent_pos --policy.lowdim-keys agent_pos --policy.lowdim-dim 9 \
+    --data.trace-cache-dirs scene data/trace_cache/human_obs8_scene wrist data/trace_cache/human_obs8_wrist \
+    --train.output-dir runs/human)
+
+# 4. evaluate in the simulator (1 GPU): success = at least 4 distinct subtasks within the step budget
+sbatch --dependency=afterok:$J4 experiments/026_eval.sbatch \
+    --checkpoint runs/human/checkpoints/latest.ckpt --out-dir output/eval/human_latest --n-rollouts 100 --n-envs 10
+
+# 5. optional: sweep the execution horizon over the top-k checkpoints, then plot success rate vs. horizon
+experiments/026_eval_sweep.sh runs/human 1 8        # results: output/eval/human/T_a_<H>/<checkpoint>/
+python experiments/027_plot_eval.py --experiments output/eval/human --labels human --out output/eval/human.png
+```
+
+Notes: step 1 keeps only replays that complete the four subtasks of their log's plan (the summary file lists the
+rest). The sweep submits one job per (checkpoint, horizon), so check how many top-k checkpoints `runs/human` holds
+first. Interrupted jobs are rerun with the same command: each stage resumes. Without Slurm, run the
+`experiments/*.py` scripts directly (the cache builder takes the modes `init`, `encode`, `verify`; training scales
+with `torchrun`).
+
 Each experiment script has an `.sbatch` companion for Slurm clusters. Everything is resumable: rerun the same command
 after a preemption or timeout.
 
