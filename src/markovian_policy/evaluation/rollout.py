@@ -78,6 +78,7 @@ class TrialTracker:
     def __init__(self, n_envs: int, plans: Sequence[Sequence[str]], criterion: SuccessCriterion, timeout: int) -> None:
         self.plans, self.criterion, self.timeout = [list(p) for p in plans], criterion, timeout
         self.completed: list[list[str]] = [[] for _ in range(n_envs)]
+        self.completed_steps: list[list[int]] = [[] for _ in range(n_envs)]  # env step count at each first completion
         self.done = np.zeros(n_envs, dtype=bool)
         self.unstable = np.zeros(n_envs, dtype=bool)
         self.steps = np.full(n_envs, timeout)
@@ -92,7 +93,9 @@ class TrialTracker:
             if unstable[i]:
                 self.unstable[i] = self.done[i] = True
             else:
-                self.completed[i] += [s for s in completed_subtasks(state[i, :N_QPOS]) if s not in self.completed[i]]
+                new = [s for s in completed_subtasks(state[i, :N_QPOS]) if s not in self.completed[i]]
+                self.completed[i] += new
+                self.completed_steps[i] += [step + 1] * len(new)
                 self.done[i] = self.criterion.is_success(self.completed[i])
             if self.done[i]:
                 self.steps[i] = step + 1
@@ -100,7 +103,7 @@ class TrialTracker:
     def result(self, i: int) -> TrialResult:
         success = self.criterion.is_success(self.completed[i])
         outcome = "success" if success else "failure" if self.unstable[i] else "timeout"
-        return TrialResult(outcome, self.plans[i], self.completed[i], int(self.steps[i]))
+        return TrialResult(outcome, self.plans[i], self.completed[i], int(self.steps[i]), self.completed_steps[i])
 
 
 class EpisodeBuffer:

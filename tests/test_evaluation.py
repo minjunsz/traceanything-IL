@@ -12,6 +12,7 @@ import zarr
 import markovian_policy.evaluation.rollout as rollout_module
 from markovian_policy.evaluation import DistinctSubtasks, EvalConfig, Evaluator, RandomPlans, RolloutConfig, TrialResult, run_rollout
 from markovian_policy.evaluation.plots import HorizonResult, collect_best, wilson_interval
+from markovian_policy.evaluation.results import make_record
 from markovian_policy.sim.env import KitchenEnv, KitchenEnvConfig
 from markovian_policy.sim.physics import KitchenPhysics, SimUnstable
 from markovian_policy.sim.vector import make_vector_env
@@ -61,6 +62,8 @@ def test_success_needs_enough_distinct_completed_subtasks(envs, monkeypatch: pyt
     results = run_rollout(ZeroPolicy(), envs, PLANS, RolloutConfig(task_timeout=10), DistinctSubtasks(2), CPU, seeds=[1, 2])
     assert all(r.result == "success" for r in results)
     assert all(r.completed[:2] == ["microwave", "kettle"] for r in results)
+    assert [r.completed_steps for r in results] == [[1, 2], [1, 1]]  # env 1 had both after its first step
+    assert make_record(1, results[0])["completed_steps"] == "1+2"
 
 
 def test_diverging_sim_fails_only_that_trial(envs, monkeypatch: pytest.MonkeyPatch) -> None:

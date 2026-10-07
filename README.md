@@ -59,8 +59,8 @@ python experiments/029_download_assets.py
 
 # 1. demonstrations: scripted expert ...
 python experiments/021_record_expert.py --n-episodes 581 --out data/demos.zarr
-#    ... or replayed human logs (a dataset without plan labels is trained with --data.lowdim-keys agent_pos
-#    --policy.lowdim-keys agent_pos --policy.lowdim-dim 9)
+#    ... or replayed human logs (they carry the plan one-hot `subtask_sequence` too; the paper's human setting does not
+#    feed it to the policy: --data.lowdim-keys agent_pos --policy.lowdim-keys agent_pos --policy.lowdim-dim 9)
 python experiments/028_build_human_demos.py --out data/human.zarr
 
 # 2. precompute the frozen encoder's tokens, once per camera (init -> encode -> verify; resumable, shardable)
@@ -76,10 +76,39 @@ python experiments/023_train_trace_policy.py --data.zarr-path data/demos.zarr \
 python experiments/026_eval.py --checkpoint runs/trace_policy/checkpoints/latest.ckpt --out-dir eval/run --n-rollouts 50
 ```
 
+## Image-based baselines (no TraceAnything)
+
+The comparison policies of the paper: a trainable R3M ResNet18 per camera on raw frames, FiLM UNet, with the history
+length `n_obs_steps` as a free parameter (2 = Markovian baseline; larger = multi-frame history, e.g. on human data).
+Place R3M's `model.pt` (the `r3m` package caches it as `~/.r3m/r3m_18/model.pt`) at `data/weights/r3m_resnet18.pt`.
+
+```bash
+sbatch experiments/030_train_image_policy.sbatch --data.zarr-path data/human.zarr \
+    --data.n-obs-steps 8 --policy.n-obs-steps 8 --data.horizon 22 --policy.horizon 22 \
+    --data.lowdim-keys agent_pos --policy.lowdim-keys agent_pos --policy.lowdim-dim 9 --train.output-dir runs/human_img8
+```
+
+For long histories (4, 8, 16 frames) use the attention variant with the paper's double encoder (the two most recent frames
+are encoded a second time by a separate encoder, with 30% token dropout during training); the horizon is
+`n_obs_steps + 14`, and data and policy must agree on both:
+
+```bash
+sbatch experiments/031_train_image_attention_policy.sbatch --data.zarr-path data/human.zarr \
+    --data.n-obs-steps 16 --policy.n-obs-steps 16 --data.horizon 30 --policy.horizon 30 \
+    --data.lowdim-keys agent_pos --policy.lowdim-keys agent_pos --policy.lowdim-dim 9 --train.output-dir runs/human_img16_attn
+```
+
+The image policies read raw frames. A compressed zarr is decompressed into RAM by every training process (56 GiB per
+process for the human data), so first export the frames once (CPU job, ~10 min) and memory-map them:
+`sbatch experiments/032_export_frames.sbatch --zarr-path data/human.zarr`, then train with `--data.mmap-dir data/human.raw`
+(and `WARM_DIR=data/human.raw` in the environment of `sbatch` to read the files sequentially into the node's page cache first).
+
+Evaluate with `experiments/026_eval.py` as usual (`load_policy` detects the policy kind from the checkpoint).
+
 ## Human-data experiment, end to end
 
-Replay the human teleoperation logs, cache the encoder tokens for both cameras, train a plan-free policy
-(`agent_pos` + scene + wrist), and evaluate it. On a Slurm cluster every step is a job; `--parsable` and
+Replay the human teleoperation logs, cache the encoder tokens for both cameras, train a policy
+(`agent_pos` + scene + wrist, with or without the plan, see step 3), and evaluate it. On a Slurm cluster every step is a job; `--parsable` and
 `--dependency=afterok` chain them (run from the repository root; GPU partitions are set in the sbatch files).
 
 ```bash
@@ -93,7 +122,9 @@ J1=$(sbatch --parsable experiments/028_build_human_demos.sbatch --out data/human
 J2=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,ZARR=data/human.zarr,CAMERA=scene experiments/022_cache_trace_tokens.sbatch)
 J3=$(sbatch --parsable --dependency=afterok:$J1 --export=ALL,ZARR=data/human.zarr,CAMERA=wrist experiments/022_cache_trace_tokens.sbatch)
 
-# 3. train: low-dim input is agent_pos only (the human logs carry no plan conditioning); 4 GPUs, resumable
+# 3. train: low-dim input is agent_pos only (plan-free, as in the paper's human setting; the human data does contain the
+#    plan, so add `subtask_sequence` to both lowdim-keys and use --policy.lowdim-dim 37 for a plan-conditioned policy,
+#    which the evaluation always feeds); 4 GPUs, resumable
 J4=$(sbatch --parsable --dependency=afterok:$J2:$J3 experiments/023_train_trace_policy.sbatch \
     --data.zarr-path data/human.zarr \
     --data.lowdim-keys agent_pos --policy.lowdim-keys agent_pos --policy.lowdim-dim 9 \
@@ -117,6 +148,15 @@ with `torchrun`).
 
 Each experiment script has an `.sbatch` companion for Slurm clusters. Everything is resumable: rerun the same command
 after a preemption or timeout.
+
+## Collecting results for plots
+
+`python experiments/034_collect_results.py` (CPU, seconds; rerun any time) rebuilds tidy CSV tables in `output/results/` from
+`runs/<run>/` and `output/eval/<run>/T_a_<H>/<checkpoint>/`: `runs.csv` (config, best validation, `meta_*` from
+`runs/<run>/meta.json`), `training_steps.csv`, `training_epochs.csv`, `eval_checkpoints.csv` (success rate with Wilson 95%
+interval per run, checkpoint, execution horizon) and `eval_trials.csv`. Every table has a `run` column to join on; a resumed
+run's duplicated log lines are deduplicated. Evaluate checkpoints into `output/eval/<run>/T_a_<H>/<checkpoint stem>/`
+(`experiments/026_eval.sbatch --out-dir ...`) so they are picked up.
 
 ## Layout
 

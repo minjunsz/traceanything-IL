@@ -42,6 +42,7 @@ class DataConfig:
     val_ratio: float = 0.03
     seed: int = 41
     trace_cache_dirs: dict[str, Path] | None = None  # camera -> TraceAnything token cache
+    mmap_dir: Path | None = None  # exported frames (stage export_frames): memory-mapped, shared by all processes of a node
 
 
 class FrankaKitchenDataset(Dataset[dict[str, Any]]):
@@ -51,7 +52,9 @@ class FrankaKitchenDataset(Dataset[dict[str, Any]]):
         buffer_keys = ["action"] + [next((b for b, o in self.key_map.items() if o == k), k) for k in config.lowdim_keys]
         if not config.trace_cache_dirs:
             buffer_keys += list(config.cameras)
-        self.replay_buffer = ReplayBuffer.from_zarr(str(config.zarr_path), keys=buffer_keys)  # only what is consumed
+        self.replay_buffer = ReplayBuffer.from_zarr(
+            str(config.zarr_path), keys=buffer_keys, mmap_dir=config.mmap_dir
+        )  # only what is consumed
 
         self._tokens: dict[str, np.memmap] | None = None  # opened lazily so each dataloader worker gets its own
         if config.trace_cache_dirs:

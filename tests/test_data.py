@@ -1,5 +1,7 @@
 """Replay buffer, window sampler and trace-cache layout."""
 
+from pathlib import Path
+
 import numpy as np
 
 from markovian_policy.data import trace_cache
@@ -51,3 +53,15 @@ def test_trace_cache_rows_cover_sampler_windows() -> None:
         e = np.searchsorted(offsets, rows[i], side="right") - 1
         want = trace_cache.episode_window_frames(ends, n_obs, e)[rows[i] - offsets[e]]
         np.testing.assert_array_equal(sampler.sample_data(i)["obs"]["frame_id"][:n_obs, 0], want)
+
+
+def test_exported_frames_are_memory_mapped_and_equal_to_the_zarr(demo_zarr: Path, tmp_path: Path) -> None:
+    from markovian_policy.data.replay_buffer import export_npy
+
+    paths = export_npy(str(demo_zarr), tmp_path / "raw", ["scene", "wrist"])
+    assert [p.name for p in paths] == ["scene.npy", "wrist.npy"] and not list((tmp_path / "raw").glob("*.tmp"))
+    plain = ReplayBuffer.from_zarr(str(demo_zarr), keys=["scene", "wrist", "action"])
+    mapped = ReplayBuffer.from_zarr(str(demo_zarr), keys=["scene", "wrist", "action"], mmap_dir=tmp_path / "raw")
+    assert isinstance(mapped["scene"], np.memmap) and not isinstance(mapped["action"], np.memmap)  # only exported keys
+    for key in ("scene", "wrist", "action"):
+        np.testing.assert_array_equal(mapped[key], plain[key])

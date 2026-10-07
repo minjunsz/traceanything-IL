@@ -331,6 +331,7 @@ platforms = ["linux-cuda"]
 python = "3.12.*"
 cuda-version = "12.9.*"
 pytorch-gpu = "*"
+torchvision = "*"
 numpy = ">=2"
 gymnasium = "*"
 zarr = ">=3"

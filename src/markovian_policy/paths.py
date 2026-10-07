@@ -8,3 +8,4 @@ TRACE_WEIGHTS: Final = DATA_DIR / "weights" / "trace_anything.pt"  # pretrained 
 HUMAN_LOGS_ZIP: Final = DATA_DIR / "raw" / "kitchen_demos_multitask.zip"  # human teleoperation logs
 EXPERT_DATASET: Final = DATA_DIR / "kitchen_demos_expert.zarr"
 HUMAN_DATASET: Final = DATA_DIR / "kitchen_demos_human.zarr"
+R3M_WEIGHTS: Final = DATA_DIR / "weights" / "r3m_resnet18.pt"  # R3M's `model.pt` (the r3m package caches it as ~/.r3m/r3m_18/model.pt)

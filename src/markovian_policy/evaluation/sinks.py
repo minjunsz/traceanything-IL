@@ -15,7 +15,7 @@ from markovian_policy.data.episodes import EpisodeWriter
 from markovian_policy.evaluation.results import TrialRecord, TrialResult
 from markovian_policy.sim.tasks import SUBTASK_IDS
 
-CSV_FIELDS = ["trial", "result", "reward", "trial_time", "plan", "completed", "plan_progress"]
+CSV_FIELDS = ["trial", "result", "reward", "trial_time", "plan", "completed", "plan_progress", "completed_steps"]
 
 
 class ResultFiles:
@@ -70,6 +70,11 @@ def summarize(trials: Sequence[TrialRecord], n_rollouts: int) -> str:
             f"Avg subtasks     : {np.mean([t['reward'] for t in trials]):.2f}",
             f"Avg plan progress: {np.mean([t['plan_progress'] for t in trials]):.2f} (leading plan subtasks done in order)",
         ]
+    steps = [[int(x) for x in text.split("+")] for t in trials if (text := t.get("completed_steps"))]
+    for k in range(1, 5):
+        reached = [s[k - 1] for s in steps if len(s) >= k]
+        if reached:
+            lines.append(f"Steps to subtask {k} : {np.mean(reached):.1f} (mean over the {len(reached)} trials that got there)")
     lines.append("Completed per subtask: " + ", ".join(f"{s}={per_subtask[s]}" for s in SUBTASK_IDS))
     return "\n".join(lines) + "\n"
 

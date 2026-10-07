@@ -1,26 +1,24 @@
 #!/bin/bash
-# Multi-GPU training of the TraceAnything-conditioned policy. Resumable: resubmit the same command (same output dir)
-# to continue from checkpoints/latest.ckpt after a preemption/timeout.
+# Multi-GPU training of the TraceAnything-conditioned policy on cached tokens. Resumable: the job is requeued after a
+# preemption; after a timeout resubmit the same command (same output dir) to continue from checkpoints/latest.ckpt.
+# n_obs_steps is the history length (the cache must have been built for it); horizon = n_obs_steps + 14. Example:
 #
-#   sbatch experiments/023_train_trace_policy.sbatch \
-#       --data.zarr-path data/kitchen_demos_expert.zarr \
-#       --data.trace-cache-dirs scene CACHE_SCENE wrist CACHE_WRIST \
-#       --train.output-dir runs/trace_policy --train.batch-size 128
+#   sbatch experiments/023_train_trace_policy.sbatch --data.zarr-path data/human.zarr \
+#       --data.n-obs-steps 16 --policy.n-obs-steps 16 --data.horizon 30 --policy.horizon 30 \
+#       --data.lowdim-keys agent_pos --policy.lowdim-keys agent_pos --policy.lowdim-dim 9 \
+#       --data.trace-cache-dirs scene data/trace_cache/human_obs16_scene wrist data/trace_cache/human_obs16_wrist \
+#       --train.output-dir runs/human_trace16 --train.batch-size 64
 #SBATCH --job-name=trace_policy
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:l40s:4
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=256G
+#SBATCH --output=output/logs/%x_%j.log
+#SBATCH --open-mode=append
+#SBATCH --qos=high_v
+#SBATCH --gres=gpu:l40:4
 #SBATCH --time=2-00:00:00
 #SBATCH --requeue
-#SBATCH --output=logs/%x-%j.out
 
 set -euo pipefail
-export PATH="$HOME/.pixi/bin:$PATH"
-[ -d "$HOME/orcd/scratch" ] && export PIXI_CACHE_DIR=$HOME/orcd/scratch/cache/pixi  # ORCD Engaging; elsewhere pixi's default cache
-export CONDA_OVERRIDE_CUDA=12.9
+PIXI_ENV=port
+source scripts/slurm_env.sh
 export NCCL_P2P_DISABLE=1
-cd "$SLURM_SUBMIT_DIR"
-
-pixi run -e port torchrun --standalone --nproc_per_node="$SLURM_GPUS_ON_NODE" \
-    experiments/023_train_trace_policy.py "$@"
+echo "job $SLURM_JOB_ID on $(hostname), restart ${SLURM_RESTART_COUNT:-0}"
+pxrun torchrun --standalone --nproc_per_node="$SLURM_GPUS_ON_NODE" experiments/023_train_trace_policy.py "$@"
